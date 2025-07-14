@@ -304,7 +304,6 @@ Write-Host "### Required Information for Secto Application ###" -ForegroundColor
 Write-Host ""
 $context = Get-MgContext
 Write-Host " => Tenant ID.......................: '$($context.TenantId)' <---" -ForegroundColor Yellow
-Write-Host " => Application Name................: '$DisplayName'" -ForegroundColor Yellow
 Write-Host " => Client ID (App ID)..............: '$($app.AppId)' <---" -ForegroundColor Yellow
 if ($CreateClientSecret) {
     Write-Host " => Client Secret...................: '$($secret.SecretText)' <---" -ForegroundColor Yellow
@@ -314,10 +313,8 @@ Write-Host ""
 if ($newUser) {
     Write-Host "### Service User Information ###" -ForegroundColor Cyan
     Write-Host ""
-    Write-Host " => Service User Display Name.......: '$($newUser.DisplayName)'" -ForegroundColor Yellow
     Write-Host " => Service User Principal Name.....: '$($newUser.UserPrincipalName)' <--- Global Reader Account" -ForegroundColor Yellow
     Write-Host " => Service User Password...........: '$password' <--- Ready to use immediately" -ForegroundColor Yellow
-    Write-Host " => Service User ID.................: '$($newUser.Id)'" -ForegroundColor Yellow
     Write-Host " => Assigned Role...................: 'Global Reader'" -ForegroundColor Yellow
     Write-Host ""
 }
