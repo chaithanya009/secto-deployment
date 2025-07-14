@@ -1,5 +1,5 @@
 <#
-  New-AppReg.ps1  ─  six permissions + auto-consent
+  New-AppReg.ps1  -  six permissions + auto-consent
 #>
 
 param(
@@ -11,14 +11,14 @@ param(
     [switch]   $CreateClientSecret
 )
 
-# ── map friendly audience names ───────────────────────────────────────────────
+# -- map friendly audience names -----------------------------------------------
 $audienceMap = @{
     SingleTenant            = 'AzureADMyOrg'
     MultiTenant             = 'AzureADMultipleOrgs'
     MultiTenantAndPersonal  = 'AzureADandPersonalMicrosoftAccount'
 }
 
-# ── install only required Microsoft.Graph sub-modules ────────────────────────
+# -- install only required Microsoft.Graph sub-modules ------------------------
 $requiredModules = @(
     'Microsoft.Graph.Authentication',              # Always required for Connect-MgGraph
     'Microsoft.Graph.Applications',                # For app registration operations
@@ -40,11 +40,11 @@ if ($modulesToInstall.Count -gt 0) {
         Write-Host "  Installing $module..." -ForegroundColor Cyan
         Install-Module $module -Scope CurrentUser -Force -ErrorAction Stop
     }
-    Write-Host "✔ Required modules installed successfully!" -ForegroundColor Green
+    Write-Host "[OK] Required modules installed successfully!" -ForegroundColor Green
     Write-Host ""
 }
 
-# ── sign in with the five admin scopes (no explicit import needed) ──────────
+# -- sign in with the five admin scopes (no explicit import needed) ----------
 $scopes = @(
     'Application.ReadWrite.All',
     'AppRoleAssignment.ReadWrite.All',
@@ -58,10 +58,10 @@ if ($TenantId) { $connect.TenantId = $TenantId }
 # Connect-MgGraph will auto-load Microsoft.Graph.Authentication module
 Connect-MgGraph @connect
 
-# ── Graph resource service-principal (only once) ──────────────────────────────
+# -- Graph resource service-principal (only once) ------------------------------
 $graphSp = Get-MgServicePrincipal -Filter "appId eq '00000003-0000-0000-c000-000000000000'"
 
-# ── permission IDs we need ────────────────────────────────────────────────────
+# -- permission IDs we need ----------------------------------------------------
 $permIds = @{
     AuditLog_Read_All                 = 'b0afded3-3588-46d8-8b3d-9842eff778da'
     AuditLogsQuery_Read_All           = '5e1e9171-754d-478c-812c-f1755a9a4c2d'
@@ -73,7 +73,7 @@ $permIds = @{
     User_Read                         = 'e1fe6dd8-ba31-4d61-89e7-88639da4683d'
 }
 
-# ── 1️⃣  Build the resourceAccess array FIRST ─────────────
+# -- #1  Build the resourceAccess array FIRST -------------
 $resourceAccess = @()
 
 # seven application roles
@@ -88,7 +88,7 @@ $resourceAccess += @{ id = $permIds.SharePointTenantSettings_Read_All; type = 'R
 # one delegated scope
 $resourceAccess += @{ id = $permIds.User_Read; type = 'Scope' }
 
-# ── 2️⃣  Wrap in requiredResourceAccess  (single-element array) ───────────────
+# -- #2  Wrap in requiredResourceAccess  (single-element array) ---------------
 $requiredResourceAccess = @(
     @{
         resourceAppId  = $graphSp.AppId
@@ -96,32 +96,32 @@ $requiredResourceAccess = @(
     }
 )
 
-# ── helper: fetch app by display name ─────────────────────────────────────────
+# -- helper: fetch app by display name -----------------------------------------
 function Get-AppByName ($name) {
     Get-MgApplication -Filter "displayName eq '$name'" -ConsistencyLevel eventual `
                       -Count c -All | Select-Object -First 1
 }
 
-# ── create or update ──────────────────────────────────────────────────────────
+# -- create or update ----------------------------------------------------------
 $app = Get-AppByName $DisplayName
 if ($null -eq $app) {
-    Write-Host "Creating application '$DisplayName' …"
+    Write-Host "Creating application '$DisplayName' ..."
     $app = New-MgApplication `
               -DisplayName            $DisplayName `
               -SignInAudience         $audienceMap[$Audience] `
               -Web                    @{ RedirectUris = $RedirectUris } `
               -RequiredResourceAccess $requiredResourceAccess
     $sp  = New-MgServicePrincipal -AppId $app.AppId
-    Write-Host "✔ Created app : $($app.AppId)"
+    Write-Host "[OK] Created app : $($app.AppId)"
 } else {
-    Write-Host "Updating application '$DisplayName' …"
+    Write-Host "Updating application '$DisplayName' ..."
     $sp  = Get-MgServicePrincipal -Filter "appId eq '$($app.AppId)'"
     Update-MgApplication -ApplicationId $app.Id `
                          -Web                    @{ RedirectUris = $RedirectUris } `
                          -RequiredResourceAccess $requiredResourceAccess
 }
 
-# ── optional: client secret ───────────────────────────────────────────────────
+# -- optional: client secret ---------------------------------------------------
 if ($CreateClientSecret) {
     $secret = Add-MgApplicationPassword -ApplicationId $app.Id `
                  -PasswordCredential @{
@@ -130,16 +130,16 @@ if ($CreateClientSecret) {
                  }
 }
 
-# ── admin consent ────────────────────────────────────────────
-Write-Host "`nGranting admin consent …"
+# -- admin consent --------------------------------------------
+Write-Host "`nGranting admin consent ..."
 
-# fetch current role assignments for this principal → Graph
+# fetch current role assignments for this principal -> Graph
 # Note: Filter by principalId is not supported, so we get all and filter client-side
 $existingRoles = Get-MgServicePrincipalAppRoleAssignment `
                    -ServicePrincipalId $graphSp.Id `
                    -All | Where-Object { $_.PrincipalId -eq $sp.Id }
 
-# 1️⃣  application-role consent
+# #1  application-role consent
 foreach ($roleId in @(
         $permIds.AuditLog_Read_All,
         $permIds.AuditLogsQuery_Read_All,
@@ -150,7 +150,7 @@ foreach ($roleId in @(
         $permIds.SharePointTenantSettings_Read_All)
 ) {
     if ($existingRoles.AppRoleId -contains $roleId) {
-        Write-Verbose "Role $roleId already present – skipping"
+        Write-Verbose "Role $roleId already present - skipping"
         continue
     }
 
@@ -161,7 +161,7 @@ foreach ($roleId in @(
         -AppRoleId          $roleId | Out-Null
 }
 
-# 2️⃣  delegated scope (User.Read)
+# #2  delegated scope (User.Read)
 $grant = Get-MgOauth2PermissionGrant `
            -Filter "clientId eq '$($sp.Id)' and resourceId eq '$($graphSp.Id)'" | Select-Object -First 1
 
@@ -173,10 +173,10 @@ if (-not $grant -or ($grant.Scope -notmatch '\bUser\.Read\b')) {
         scope       = 'User.Read'
     } | Out-Null
 }
-Write-Host "✔ Admin consent granted.`n" -ForegroundColor Green
+Write-Host "[OK] Admin consent granted.`n" -ForegroundColor Green
 
-# ── create user with Global Reader role ──────────────────────────────────────
-Write-Host "Creating service user with Global Reader permissions …" -ForegroundColor Cyan
+# -- create user with Global Reader role --------------------------------------
+Write-Host "Creating service user with Global Reader permissions ..." -ForegroundColor Cyan
 
 # Validate required permissions
 $context = Get-MgContext
@@ -190,9 +190,9 @@ foreach ($scope in $requiredScopes) {
 }
 
 if ($missingScopes.Count -gt 0) {
-    Write-Host "⚠ Missing required permissions: $($missingScopes -join ', ')" -ForegroundColor Red
-    Write-Host "   → Please ensure these scopes are consented to in your app registration." -ForegroundColor Yellow
-    Write-Host "   → Continuing anyway, but operations may fail..." -ForegroundColor Yellow
+    Write-Host "[WARN] Missing required permissions: $($missingScopes -join ', ')" -ForegroundColor Red
+    Write-Host "   -> Please ensure these scopes are consented to in your app registration." -ForegroundColor Yellow
+    Write-Host "   -> Continuing anyway, but operations may fail..." -ForegroundColor Yellow
 }
 
 # Generate secure random password
@@ -230,7 +230,7 @@ try {
         -UserPrincipalName $userPrincipalName `
         -UsageLocation "US"
     
-    Write-Host "✔ Created user: $userPrincipalName" -ForegroundColor Green
+    Write-Host "[OK] Created user: $userPrincipalName" -ForegroundColor Green
     
     # Wait for user replication across Microsoft services
     Write-Host "Waiting for user replication (30 seconds)..." -ForegroundColor Yellow
@@ -239,9 +239,9 @@ try {
     # Verify user exists before proceeding
     try {
         $verifyUser = Get-MgUser -UserId $newUser.Id -ErrorAction Stop
-        Write-Host "✔ User verified in directory" -ForegroundColor Green
+        Write-Host "[OK] User verified in directory" -ForegroundColor Green
     } catch {
-        Write-Host "⚠ User not yet replicated, waiting additional 15 seconds..." -ForegroundColor Yellow
+        Write-Host "[WARN] User not yet replicated, waiting additional 15 seconds..." -ForegroundColor Yellow
         Start-Sleep -Seconds 15
         $verifyUser = Get-MgUser -UserId $newUser.Id
     }
@@ -251,7 +251,7 @@ try {
     $role = Get-MgDirectoryRole | Where-Object {$_.displayName -eq $roleName}
     
     if ($null -eq $role) {
-        Write-Host "Activating Global Reader role in tenant …"
+        Write-Host "Activating Global Reader role in tenant ..."
         $roleTemplate = Get-MgDirectoryRoleTemplate | Where-Object {$_.displayName -eq $roleName}
         if ($roleTemplate) {
             $role = New-MgDirectoryRole -DisplayName $roleName -RoleTemplateId $roleTemplate.Id
@@ -266,9 +266,9 @@ try {
             "@odata.id" = "https://graph.microsoft.com/v1.0/directoryObjects/$($newUser.Id)"
         }
         New-MgDirectoryRoleMemberByRef -DirectoryRoleId $role.Id -BodyParameter $newRoleMember
-        Write-Host "✔ Assigned Global Reader role to user" -ForegroundColor Green
+        Write-Host "[OK] Assigned Global Reader role to user" -ForegroundColor Green
     } catch {
-        Write-Host "⚠ Role assignment error: $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-Host "[WARN] Role assignment error: $($_.Exception.Message)" -ForegroundColor Yellow
         # Try alternative approach using direct REST API call
         try {
             $uri = "https://graph.microsoft.com/v1.0/directoryRoles/$($role.Id)/members/`$ref"
@@ -277,29 +277,29 @@ try {
             } | ConvertTo-Json
             
             Invoke-MgGraphRequest -Method POST -Uri $uri -Body $body -ContentType "application/json"
-            Write-Host "✔ Assigned Global Reader role using REST API" -ForegroundColor Green
+            Write-Host "[OK] Assigned Global Reader role using REST API" -ForegroundColor Green
         } catch {
-            Write-Host "⚠ Failed to assign role via REST API: $($_.Exception.Message)" -ForegroundColor Red
+            Write-Host "[WARN] Failed to assign role via REST API: $($_.Exception.Message)" -ForegroundColor Red
             throw "Could not assign Global Reader role to user"
         }
     }
 }
 catch {
-    Write-Host "⚠ Error creating user or assigning role: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "[WARN] Error creating user or assigning role: $($_.Exception.Message)" -ForegroundColor Red
     if ($_.Exception.Message -like "*domain*") {
-        Write-Host "   → Domain validation issue. Please ensure your tenant has verified domains." -ForegroundColor Yellow
-        Write-Host "   → Run 'Get-MgDomain' to check available verified domains." -ForegroundColor Yellow
+        Write-Host "   -> Domain validation issue. Please ensure your tenant has verified domains." -ForegroundColor Yellow
+        Write-Host "   -> Run 'Get-MgDomain' to check available verified domains." -ForegroundColor Yellow
     } elseif ($_.Exception.Message -like "*permission*" -or $_.Exception.Message -like "*forbidden*") {
-        Write-Host "   → Permission issue. Ensure you have User.ReadWrite.All and RoleManagement.ReadWrite.Directory permissions." -ForegroundColor Yellow
+        Write-Host "   -> Permission issue. Ensure you have User.ReadWrite.All and RoleManagement.ReadWrite.Directory permissions." -ForegroundColor Yellow
     } elseif ($_.Exception.Message -like "*role*") {
-        Write-Host "   → Role assignment issue. The user was created but role assignment failed." -ForegroundColor Yellow
-        Write-Host "   → You can manually assign the Global Reader role in the Azure portal." -ForegroundColor Yellow
+        Write-Host "   -> Role assignment issue. The user was created but role assignment failed." -ForegroundColor Yellow
+        Write-Host "   -> You can manually assign the Global Reader role in the Azure portal." -ForegroundColor Yellow
     }
-    Write-Host "   → For troubleshooting, check: https://learn.microsoft.com/graph/errors" -ForegroundColor Yellow
+    Write-Host "   -> For troubleshooting, check: https://learn.microsoft.com/graph/errors" -ForegroundColor Yellow
     $newUser = $null
 }
 
-# ── display required information ──────────────────────────────────────────────
+# -- display required information ----------------------------------------------
 Write-Host "### Required Information for Secto Application ###" -ForegroundColor Cyan
 Write-Host ""
 $context = Get-MgContext
