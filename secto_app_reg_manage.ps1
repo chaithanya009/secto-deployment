@@ -71,12 +71,13 @@ $permIds = @{
     Policy_Read_All                   = '246dd0d5-5bd0-4def-940b-0421030a5b68'
     SharePointTenantSettings_Read_All = '83d4163d-a2d8-4d3b-9695-4ae3ca98f888'
     User_Read                         = 'e1fe6dd8-ba31-4d61-89e7-88639da4683d'
+    User_RevokeSessions_All           = '77f3a031-c388-4f99-b373-dc68676a979e'
 }
 
 # -- #1  Build the resourceAccess array FIRST -------------
 $resourceAccess = @()
 
-# seven application roles
+# eight application roles
 $resourceAccess += @{ id = $permIds.AuditLog_Read_All;                 type = 'Role' }
 $resourceAccess += @{ id = $permIds.AuditLogsQuery_Read_All;           type = 'Role' }
 $resourceAccess += @{ id = $permIds.Directory_Read_All;                type = 'Role' }
@@ -84,6 +85,7 @@ $resourceAccess += @{ id = $permIds.Domain_Read_All;                   type = 'R
 $resourceAccess += @{ id = $permIds.Organization_Read_All;             type = 'Role' }
 $resourceAccess += @{ id = $permIds.Policy_Read_All;                   type = 'Role' }
 $resourceAccess += @{ id = $permIds.SharePointTenantSettings_Read_All; type = 'Role' }
+$resourceAccess += @{ id = $permIds.User_RevokeSessions_All;           type = 'Role' }
 
 # one delegated scope
 $resourceAccess += @{ id = $permIds.User_Read; type = 'Scope' }
@@ -147,7 +149,8 @@ foreach ($roleId in @(
         $permIds.Domain_Read_All,
         $permIds.Organization_Read_All,
         $permIds.Policy_Read_All,
-        $permIds.SharePointTenantSettings_Read_All)
+        $permIds.SharePointTenantSettings_Read_All,
+        $permIds.User_RevokeSessions_All)
 ) {
     if ($existingRoles.AppRoleId -contains $roleId) {
         Write-Verbose "Role $roleId already present - skipping"
