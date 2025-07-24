@@ -11,6 +11,17 @@ param(
     [switch]   $CreateClientSecret
 )
 
+# -- early validation of TenantId (fail fast) ----------------------------------
+if ($TenantId) {
+    # Starts with a letter, 3-27 chars total, letters/digits/hyphens, ends with letter or digit
+    $tenantPattern = '^[A-Za-z][A-Za-z0-9-]{1,25}[A-Za-z0-9]\.onmicrosoft\.com$'
+    if (-not ([regex]::IsMatch($TenantId, $tenantPattern))) {
+        Write-Host "[ERROR] '$TenantId' is not a valid Entra tenant domain." -ForegroundColor Red
+        Write-Host "        You can locate this domain in Microsoft Entra ID → Overview → Primary domain." -ForegroundColor Yellow
+        exit 1   # graceful termination without verbose stack trace
+    }
+}
+
 # -- map friendly audience names -----------------------------------------------
 $audienceMap = @{
     SingleTenant            = 'AzureADMyOrg'
@@ -57,9 +68,13 @@ if ($TenantId) { $connect.TenantId = $TenantId }
 
 # Connect-MgGraph will auto-load Microsoft.Graph.Authentication module
 Connect-MgGraph @connect
+Write-Host "[INFO] Connected to Microsoft Graph for tenant '$TenantId'." -ForegroundColor Cyan
 
 # -- Graph resource service-principal (only once) ------------------------------
-$graphSp = Get-MgServicePrincipal -Filter "appId eq '00000003-0000-0000-c000-000000000000'"
+$graphAppId = '00000003-0000-0000-c000-000000000000'
+Write-Host "[INFO] Fetching Microsoft Graph service principal ..." -ForegroundColor Cyan
+$graphSp = Get-MgServicePrincipal -Filter "appId eq '$graphAppId'" -Top 1
+if (-not $graphSp) { throw "Unable to retrieve Microsoft Graph service principal" }
 
 # -- permission IDs we need ----------------------------------------------------
 $permIds = @{
@@ -71,12 +86,13 @@ $permIds = @{
     Policy_Read_All                   = '246dd0d5-5bd0-4def-940b-0421030a5b68'
     SharePointTenantSettings_Read_All = '83d4163d-a2d8-4d3b-9695-4ae3ca98f888'
     User_Read                         = 'e1fe6dd8-ba31-4d61-89e7-88639da4683d'
+    User_RevokeSessions_All           = '77f3a031-c388-4f99-b373-dc68676a979e'
 }
 
 # -- #1  Build the resourceAccess array FIRST -------------
 $resourceAccess = @()
 
-# seven application roles
+# eight application roles
 $resourceAccess += @{ id = $permIds.AuditLog_Read_All;                 type = 'Role' }
 $resourceAccess += @{ id = $permIds.AuditLogsQuery_Read_All;           type = 'Role' }
 $resourceAccess += @{ id = $permIds.Directory_Read_All;                type = 'Role' }
@@ -84,6 +100,7 @@ $resourceAccess += @{ id = $permIds.Domain_Read_All;                   type = 'R
 $resourceAccess += @{ id = $permIds.Organization_Read_All;             type = 'Role' }
 $resourceAccess += @{ id = $permIds.Policy_Read_All;                   type = 'Role' }
 $resourceAccess += @{ id = $permIds.SharePointTenantSettings_Read_All; type = 'Role' }
+$resourceAccess += @{ id = $permIds.User_RevokeSessions_All;           type = 'Role' }
 
 # one delegated scope
 $resourceAccess += @{ id = $permIds.User_Read; type = 'Scope' }
@@ -116,9 +133,27 @@ if ($null -eq $app) {
 } else {
     Write-Host "Updating application '$DisplayName' ..."
     $sp  = Get-MgServicePrincipal -Filter "appId eq '$($app.AppId)'"
+    if (-not $sp) { $sp = New-MgServicePrincipal -AppId $app.AppId }
+
+    # Merge redirect URIs (existing + new, unique)
+    $mergedRedirectUris = @($app.Web.RedirectUris + $RedirectUris) | Select-Object -Unique
+
+    # Merge required resource access to keep existing permissions intact
+    $existingRRA = @($app.RequiredResourceAccess)
+    $graphRRA    = $existingRRA | Where-Object { $_.resourceAppId -eq $graphSp.AppId }
+
+    if ($graphRRA) {
+        $existingIds  = $graphRRA.resourceAccess.id
+        $missingItems = $resourceAccess | Where-Object { $existingIds -notcontains $_.id }
+        $graphRRA.resourceAccess += $missingItems
+    }
+    else {
+        $existingRRA += @{ resourceAppId = $graphSp.AppId; resourceAccess = $resourceAccess }
+    }
+
     Update-MgApplication -ApplicationId $app.Id `
-                         -Web                    @{ RedirectUris = $RedirectUris } `
-                         -RequiredResourceAccess $requiredResourceAccess
+                         -Web @{ RedirectUris = $mergedRedirectUris } `
+                         -RequiredResourceAccess $existingRRA
 }
 
 # -- optional: client secret ---------------------------------------------------
@@ -133,11 +168,9 @@ if ($CreateClientSecret) {
 # -- admin consent --------------------------------------------
 Write-Host "`nGranting admin consent ..."
 
-# fetch current role assignments for this principal -> Graph
-# Note: Filter by principalId is not supported, so we get all and filter client-side
-$existingRoles = Get-MgServicePrincipalAppRoleAssignment `
-                   -ServicePrincipalId $graphSp.Id `
-                   -All | Where-Object { $_.PrincipalId -eq $sp.Id }
+# fetch current role assignments for this application against Microsoft Graph
+$existingRoles = Get-MgServicePrincipalAppRoleAssignment -ServicePrincipalId $sp.Id -All |
+                 Where-Object { $_.ResourceId -eq $graphSp.Id }
 
 # #1  application-role consent
 foreach ($roleId in @(
@@ -147,18 +180,25 @@ foreach ($roleId in @(
         $permIds.Domain_Read_All,
         $permIds.Organization_Read_All,
         $permIds.Policy_Read_All,
-        $permIds.SharePointTenantSettings_Read_All)
+        $permIds.SharePointTenantSettings_Read_All,
+        $permIds.User_RevokeSessions_All)
 ) {
     if ($existingRoles.AppRoleId -contains $roleId) {
         Write-Verbose "Role $roleId already present - skipping"
         continue
     }
 
-    New-MgServicePrincipalAppRoleAssignment `
-        -ServicePrincipalId $graphSp.Id `
-        -PrincipalId        $sp.Id       `
-        -ResourceId         $graphSp.Id  `
-        -AppRoleId          $roleId | Out-Null
+    try {
+        New-MgServicePrincipalAppRoleAssignment `
+            -ServicePrincipalId $graphSp.Id `
+            -PrincipalId        $sp.Id       `
+            -ResourceId         $graphSp.Id  `
+            -AppRoleId          $roleId | Out-Null
+    } catch {
+        if ($_.ErrorDetails.Message -match 'already exists') {
+            Write-Verbose "Role $roleId already assigned (caught 400) - skipping"
+        } else { throw }
+    }
 }
 
 # #2  delegated scope (User.Read)
@@ -221,82 +261,60 @@ $passwordProfile = @{
     ForceChangePasswordNextSignIn = $false
 }
 
-# Create the user
-try {
-    $newUser = New-MgUser -DisplayName "Secto Service Reader" `
-        -PasswordProfile $passwordProfile `
-        -AccountEnabled `
-        -MailNickName $userName `
-        -UserPrincipalName $userPrincipalName `
-        -UsageLocation "US"
-    
-    Write-Host "[OK] Created user: $userPrincipalName" -ForegroundColor Green
-    
-    # Wait for user replication across Microsoft services
-    Write-Host "Waiting for user replication (30 seconds)..." -ForegroundColor Yellow
-    Start-Sleep -Seconds 30
-    
-    # Verify user exists before proceeding
+# -- user creation or retrieval -----------------------------------------------
+$existingUser = Get-MgUser -Filter "userPrincipalName eq '$userPrincipalName'" -ConsistencyLevel eventual -Count c | Select-Object -First 1
+if ($existingUser) {
+    Write-Host "Service user '$userPrincipalName' already exists - skipping creation." -ForegroundColor Green
+    $newUser = $existingUser
+}
+else {
     try {
-        $verifyUser = Get-MgUser -UserId $newUser.Id -ErrorAction Stop
-        Write-Host "[OK] User verified in directory" -ForegroundColor Green
+        $newUser = New-MgUser -DisplayName "Secto Service Reader" `
+            -PasswordProfile $passwordProfile `
+            -AccountEnabled `
+            -MailNickName $userName `
+            -UserPrincipalName $userPrincipalName `
+            -UsageLocation "US"
+        Write-Host "[OK] Created user: $userPrincipalName" -ForegroundColor Green
+        # Wait for replication
+        Write-Host "Waiting for user replication (10 seconds)..." -ForegroundColor Yellow
+        Start-Sleep -Seconds 10
     } catch {
-        Write-Host "[WARN] User not yet replicated, waiting additional 15 seconds..." -ForegroundColor Yellow
-        Start-Sleep -Seconds 15
-        $verifyUser = Get-MgUser -UserId $newUser.Id
-    }
-    
-    # Get Global Reader role (activate if needed)
-    $roleName = "Global Reader"
-    $role = Get-MgDirectoryRole | Where-Object {$_.displayName -eq $roleName}
-    
-    if ($null -eq $role) {
-        Write-Host "Activating Global Reader role in tenant ..."
-        $roleTemplate = Get-MgDirectoryRoleTemplate | Where-Object {$_.displayName -eq $roleName}
-        if ($roleTemplate) {
-            $role = New-MgDirectoryRole -DisplayName $roleName -RoleTemplateId $roleTemplate.Id
-        } else {
-            throw "Global Reader role template not found"
-        }
-    }
-    
-    # Assign Global Reader role to the user using correct URI format
-    try {
-        $newRoleMember = @{
-            "@odata.id" = "https://graph.microsoft.com/v1.0/directoryObjects/$($newUser.Id)"
-        }
-        New-MgDirectoryRoleMemberByRef -DirectoryRoleId $role.Id -BodyParameter $newRoleMember
-        Write-Host "[OK] Assigned Global Reader role to user" -ForegroundColor Green
-    } catch {
-        Write-Host "[WARN] Role assignment error: $($_.Exception.Message)" -ForegroundColor Yellow
-        # Try alternative approach using direct REST API call
-        try {
-            $uri = "https://graph.microsoft.com/v1.0/directoryRoles/$($role.Id)/members/`$ref"
-            $body = @{
-                "@odata.id" = "https://graph.microsoft.com/v1.0/directoryObjects/$($newUser.Id)"
-            } | ConvertTo-Json
-            
-            Invoke-MgGraphRequest -Method POST -Uri $uri -Body $body -ContentType "application/json"
-            Write-Host "[OK] Assigned Global Reader role using REST API" -ForegroundColor Green
-        } catch {
-            Write-Host "[WARN] Failed to assign role via REST API: $($_.Exception.Message)" -ForegroundColor Red
-            throw "Could not assign Global Reader role to user"
-        }
+        Write-Host "[WARN] Error creating user: $($_.Exception.Message)" -ForegroundColor Red
+        $newUser = $null
     }
 }
-catch {
-    Write-Host "[WARN] Error creating user or assigning role: $($_.Exception.Message)" -ForegroundColor Red
-    if ($_.Exception.Message -like "*domain*") {
-        Write-Host "   -> Domain validation issue. Please ensure your tenant has verified domains." -ForegroundColor Yellow
-        Write-Host "   -> Run 'Get-MgDomain' to check available verified domains." -ForegroundColor Yellow
-    } elseif ($_.Exception.Message -like "*permission*" -or $_.Exception.Message -like "*forbidden*") {
-        Write-Host "   -> Permission issue. Ensure you have User.ReadWrite.All and RoleManagement.ReadWrite.Directory permissions." -ForegroundColor Yellow
-    } elseif ($_.Exception.Message -like "*role*") {
-        Write-Host "   -> Role assignment issue. The user was created but role assignment failed." -ForegroundColor Yellow
-        Write-Host "   -> You can manually assign the Global Reader role in the Azure portal." -ForegroundColor Yellow
+
+# -- ensure Global Reader role assignment -------------------------------------
+if ($newUser) {
+    $roleName = "Global Reader"
+    $role = Get-MgDirectoryRole | Where-Object { $_.displayName -eq $roleName }
+    if (-not $role) {
+        Write-Host "Activating Global Reader role in tenant ..."
+        $roleTemplate = Get-MgDirectoryRoleTemplate | Where-Object { $_.displayName -eq $roleName }
+        if ($roleTemplate) { $role = New-MgDirectoryRole -DisplayName $roleName -RoleTemplateId $roleTemplate.Id }
     }
-    Write-Host "   -> For troubleshooting, check: https://learn.microsoft.com/graph/errors" -ForegroundColor Yellow
-    $newUser = $null
+
+    $isMember = $false
+    if ($role) {
+        try {
+            $isMember = (Get-MgDirectoryRoleMember -DirectoryRoleId $role.Id -All | Where-Object { $_.Id -eq $newUser.Id }) -ne $null
+        } catch { $isMember = $false }
+    }
+
+    if (-not $isMember) {
+        Write-Host "Assigning Global Reader role to user ..."
+        $newRoleMember = @{ "@odata.id" = "https://graph.microsoft.com/v1.0/directoryObjects/$($newUser.Id)" }
+        try {
+            New-MgDirectoryRoleMemberByRef -DirectoryRoleId $role.Id -BodyParameter $newRoleMember
+            Write-Host "[OK] Assigned Global Reader role to user" -ForegroundColor Green
+        } catch {
+            Write-Host "[WARN] Failed to assign Global Reader role: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
+    else {
+        Write-Host "User already has Global Reader role – skipping assignment." -ForegroundColor Green
+    }
 }
 
 # -- display required information ----------------------------------------------
