@@ -264,7 +264,14 @@ $passwordProfile = @{
 # -- user creation or retrieval -----------------------------------------------
 $existingUser = Get-MgUser -Filter "userPrincipalName eq '$userPrincipalName'" -ConsistencyLevel eventual -Count c | Select-Object -First 1
 if ($existingUser) {
-    Write-Host "Service user '$userPrincipalName' already exists - skipping creation." -ForegroundColor Green
+    Write-Host "Service user '$userPrincipalName' already exists – resetting password ..." -ForegroundColor Cyan
+
+    # apply the freshly‑generated password to the existing account
+    Update-MgUser -UserId $existingUser.Id -PasswordProfile @{
+        Password = $password
+        ForceChangePasswordNextSignIn = $false
+    } | Out-Null
+
     $newUser = $existingUser
 }
 else {
