@@ -113,8 +113,11 @@ $requiredResourceAccess = @(
 
 # -- helper: fetch app by display name -----------------------------------------
 function Get-AppByName ($name) {
-    Get-MgApplication -Filter "displayName eq '$name'" -ConsistencyLevel eventual `
-                      -Count c -All | Select-Object -First 1
+    $apps = Get-MgApplication -Filter "displayName eq '$name'" -ConsistencyLevel eventual -Count c -All
+    if ($apps.Count -gt 1) {
+        throw "Found $($apps.Count) applications named '$name'. Delete or rename duplicates to proceed."
+    }
+    return $apps | Select-Object -First 1
 }
 
 # -- create or update ----------------------------------------------------------
