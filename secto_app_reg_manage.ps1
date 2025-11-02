@@ -11,6 +11,17 @@ param(
     [switch]   $CreateClientSecret
 )
 
+# -- early validation of TenantId (fail fast) ----------------------------------
+if ($TenantId) {
+    # Starts with a letter, 3-27 chars total, letters/digits/hyphens, ends with letter or digit
+    $tenantPattern = '^[A-Za-z][A-Za-z0-9-]{1,25}[A-Za-z0-9]\.onmicrosoft\.com$'
+    if (-not ([regex]::IsMatch($TenantId, $tenantPattern))) {
+        Write-Host "[ERROR] '$TenantId' is not a valid Entra tenant domain." -ForegroundColor Red
+        Write-Host "        You can locate this domain in Microsoft Entra ID → Overview → Primary domain." -ForegroundColor Yellow
+        exit 1   # graceful termination without verbose stack trace
+    }
+}
+
 # -- map friendly audience names -----------------------------------------------
 $audienceMap = @{
     SingleTenant            = 'AzureADMyOrg'
