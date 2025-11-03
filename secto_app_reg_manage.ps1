@@ -68,9 +68,13 @@ if ($TenantId) { $connect.TenantId = $TenantId }
 
 # Connect-MgGraph will auto-load Microsoft.Graph.Authentication module
 Connect-MgGraph @connect
+Write-Host "[INFO] Connected to Microsoft Graph for tenant '$TenantId'." -ForegroundColor Cyan
 
 # -- Graph resource service-principal (only once) ------------------------------
-$graphSp = Get-MgServicePrincipal -Filter "appId eq '00000003-0000-0000-c000-000000000000'"
+$graphAppId = '00000003-0000-0000-c000-000000000000'
+Write-Host "[INFO] Fetching Microsoft Graph service principal ..." -ForegroundColor Cyan
+$graphSp = Get-MgServicePrincipal -Filter "appId eq '$graphAppId'" -Top 1
+if (-not $graphSp) { throw "Unable to retrieve Microsoft Graph service principal" }
 
 # -- permission IDs we need (Microsoft Graph only) --------------------
 $permIds = @{
@@ -84,7 +88,6 @@ $permIds = @{
     Policy_Read_All                   = '246dd0d5-5bd0-4def-940b-0421030a5b68'
     SharePointTenantSettings_Read_All = '83d4163d-a2d8-4d3b-9695-4ae3ca98f888'
     User_Read                         = 'e1fe6dd8-ba31-4d61-89e7-88639da4683d'
-    User_RevokeSessions_All           = '77f3a031-c388-4f99-b373-dc68676a979e'
 
     # Office 365 Exchange Online
     Exchange_ManageAsApp              = 'dc50a0fb-09a3-484d-be87-e023b12c6440'
@@ -119,7 +122,6 @@ $graphResourceAccess += @{ id = $permIds.Mail_Read;                         type
 $graphResourceAccess += @{ id = $permIds.Organization_Read_All;             type = 'Role' }
 $graphResourceAccess += @{ id = $permIds.Policy_Read_All;                   type = 'Role' }
 $graphResourceAccess += @{ id = $permIds.SharePointTenantSettings_Read_All; type = 'Role' }
-$graphResourceAccess += @{ id = $permIds.User_RevokeSessions_All;           type = 'Role' }
 $graphResourceAccess += @{ id = $permIds.User_Read;                         type = 'Scope' }
 
 # -- #2  Wrap in requiredResourceAccess ----------------
@@ -147,8 +149,11 @@ $requiredResourceAccess = @(
 
 # -- helper: fetch app by display name -----------------------------------------
 function Get-AppByName ($name) {
-    Get-MgApplication -Filter "displayName eq '$name'" -ConsistencyLevel eventual `
-                      -Count c -All | Select-Object -First 1
+    $apps = Get-MgApplication -Filter "displayName eq '$name'" -ConsistencyLevel eventual -Count c -All
+    if ($apps.Count -gt 1) {
+        throw "Found $($apps.Count) applications named '$name'. Delete or rename duplicates to proceed."
+    }
+    return $apps | Select-Object -First 1
 }
 
 # -- create or update ----------------------------------------------------------
@@ -165,9 +170,27 @@ if ($null -eq $app) {
 } else {
     Write-Host "Updating application '$DisplayName' ..."
     $sp  = Get-MgServicePrincipal -Filter "appId eq '$($app.AppId)'"
+    if (-not $sp) { $sp = New-MgServicePrincipal -AppId $app.AppId }
+
+    # Merge redirect URIs (existing + new, unique)
+    $mergedRedirectUris = @($app.Web.RedirectUris + $RedirectUris) | Select-Object -Unique
+
+    # Merge required resource access to keep existing permissions intact
+    $existingRRA = @($app.RequiredResourceAccess)
+    $graphRRA    = $existingRRA | Where-Object { $_.resourceAppId -eq $graphSp.AppId }
+
+    if ($graphRRA) {
+        $existingIds  = $graphRRA.resourceAccess.id
+        $missingItems = $resourceAccess | Where-Object { $existingIds -notcontains $_.id }
+        $graphRRA.resourceAccess += $missingItems
+    }
+    else {
+        $existingRRA += @{ resourceAppId = $graphSp.AppId; resourceAccess = $resourceAccess }
+    }
+
     Update-MgApplication -ApplicationId $app.Id `
-                         -Web                    @{ RedirectUris = $RedirectUris } `
-                         -RequiredResourceAccess $requiredResourceAccess
+                         -Web @{ RedirectUris = $mergedRedirectUris } `
+                         -RequiredResourceAccess $existingRRA
 }
 
 # -- optional: client secret ---------------------------------------------------
