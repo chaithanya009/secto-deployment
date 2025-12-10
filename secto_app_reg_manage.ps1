@@ -83,7 +83,6 @@ $permIds = @{
     AuditLogsQuery_Read_All           = '5e1e9171-754d-478c-812c-f1755a9a4c2d'
     Directory_Read_All                = '7ab1d382-f21e-4acd-a863-ba3e13f7da61'
     Domain_Read_All                   = 'dbb9058a-0e50-45d7-ae91-66909b5d4664'
-    Mail_Read                         = '810c84a8-4a9e-49e6-bf7d-12d183f40d01'
     Organization_Read_All             = '498476ce-e0fe-48b0-b801-37ba7e2685c6'
     Policy_Read_All                   = '246dd0d5-5bd0-4def-940b-0421030a5b68'
     SharePointTenantSettings_Read_All = '83d4163d-a2d8-4d3b-9695-4ae3ca98f888'
