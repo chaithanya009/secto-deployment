@@ -76,8 +76,9 @@ Write-Host "[INFO] Fetching Microsoft Graph service principal ..." -ForegroundCo
 $graphSp = Get-MgServicePrincipal -Filter "appId eq '$graphAppId'" -Top 1
 if (-not $graphSp) { throw "Unable to retrieve Microsoft Graph service principal" }
 
-# -- permission IDs we need ----------------------------------------------------
+# -- permission IDs we need (Microsoft Graph only) --------------------
 $permIds = @{
+    # Microsoft Graph
     AuditLog_Read_All                 = 'b0afded3-3588-46d8-8b3d-9842eff778da'
     AuditLogsQuery_Read_All           = '5e1e9171-754d-478c-812c-f1755a9a4c2d'
     Directory_Read_All                = '7ab1d382-f21e-4acd-a863-ba3e13f7da61'
@@ -86,28 +87,62 @@ $permIds = @{
     Policy_Read_All                   = '246dd0d5-5bd0-4def-940b-0421030a5b68'
     SharePointTenantSettings_Read_All = '83d4163d-a2d8-4d3b-9695-4ae3ca98f888'
     User_Read                         = 'e1fe6dd8-ba31-4d61-89e7-88639da4683d'
+
+    # Office 365 Exchange Online
+    Exchange_ManageAsApp              = 'dc50a0fb-09a3-484d-be87-e023b12c6440'
+    ReportingWebService_Read_All      = 'b4d5a5c7-c085-487f-b922-ef0d6ebde6b1'
+
+    # Office 365 Management APIs
+    ActivityFeed_Read                 = '594c1fb6-4f81-4475-ae41-0c394909246c'
+    ActivityFeed_ReadDlp              = '4807a72c-ad38-4250-94c9-4eabfe26cd55'
+    ServiceHealth_Read                = 'e2cea78f-e743-4d8f-a16a-75b629a038ae'
 }
 
-# -- #1  Build the resourceAccess array FIRST -------------
-$resourceAccess = @()
+# -- target service principals for required APIs ------------------------
+$exchangeSp = Get-MgServicePrincipal -Filter "appId eq '00000002-0000-0ff1-ce00-000000000000'"
+if (-not $exchangeSp) {
+    throw "Unable to locate the Office 365 Exchange Online service principal."
+}
 
-# seven application roles
-$resourceAccess += @{ id = $permIds.AuditLog_Read_All;                 type = 'Role' }
-$resourceAccess += @{ id = $permIds.AuditLogsQuery_Read_All;           type = 'Role' }
-$resourceAccess += @{ id = $permIds.Directory_Read_All;                type = 'Role' }
-$resourceAccess += @{ id = $permIds.Domain_Read_All;                   type = 'Role' }
-$resourceAccess += @{ id = $permIds.Organization_Read_All;             type = 'Role' }
-$resourceAccess += @{ id = $permIds.Policy_Read_All;                   type = 'Role' }
-$resourceAccess += @{ id = $permIds.SharePointTenantSettings_Read_All; type = 'Role' }
+$managementSp = Get-MgServicePrincipal -Filter "appId eq 'c5393580-f805-4401-95e8-94b7a6ef2fc2'"
+if (-not $managementSp) {
+    throw "Unable to locate the Office 365 Management APIs service principal."
+}
 
-# one delegated scope
-$resourceAccess += @{ id = $permIds.User_Read; type = 'Scope' }
+# -- #1  Build the resourceAccess array for Microsoft Graph ------
+$graphResourceAccess = @()
 
-# -- #2  Wrap in requiredResourceAccess  (single-element array) ---------------
+# Application roles and delegated scopes
+$graphResourceAccess += @{ id = $permIds.AuditLog_Read_All;                 type = 'Role' }
+$graphResourceAccess += @{ id = $permIds.AuditLogsQuery_Read_All;           type = 'Role' }
+$graphResourceAccess += @{ id = $permIds.Directory_Read_All;                type = 'Role' }
+$graphResourceAccess += @{ id = $permIds.Domain_Read_All;                   type = 'Role' }
+$graphResourceAccess += @{ id = $permIds.Mail_Read;                         type = 'Role' }
+$graphResourceAccess += @{ id = $permIds.Organization_Read_All;             type = 'Role' }
+$graphResourceAccess += @{ id = $permIds.Policy_Read_All;                   type = 'Role' }
+$graphResourceAccess += @{ id = $permIds.SharePointTenantSettings_Read_All; type = 'Role' }
+$graphResourceAccess += @{ id = $permIds.User_Read;                         type = 'Scope' }
+
+# -- #2  Wrap in requiredResourceAccess ----------------
 $requiredResourceAccess = @(
     @{
         resourceAppId  = $graphSp.AppId
-        resourceAccess = $resourceAccess
+        resourceAccess = $graphResourceAccess
+    },
+    @{
+        resourceAppId  = $exchangeSp.AppId
+        resourceAccess = @(
+            @{ id = $permIds.Exchange_ManageAsApp;         type = 'Role' }
+            @{ id = $permIds.ReportingWebService_Read_All; type = 'Role' }
+        )
+    },
+    @{
+        resourceAppId  = $managementSp.AppId
+        resourceAccess = @(
+            @{ id = $permIds.ActivityFeed_Read;    type = 'Role' }
+            @{ id = $permIds.ActivityFeed_ReadDlp; type = 'Role' }
+            @{ id = $permIds.ServiceHealth_Read;   type = 'Role' }
+        )
     }
 )
 
@@ -169,39 +204,80 @@ if ($CreateClientSecret) {
 # -- admin consent --------------------------------------------
 Write-Host "`nGranting admin consent ..."
 
-# fetch current role assignments for this application against Microsoft Graph
-$existingRoles = Get-MgServicePrincipalAppRoleAssignment -ServicePrincipalId $sp.Id -All |
-                 Where-Object { $_.ResourceId -eq $graphSp.Id }
+# fetch current role assignments for this principal -> Graph
+# Note: Filter by principalId is not supported, so we get all and filter client-side
+$existingGraphRoles = Get-MgServicePrincipalAppRoleAssignment `
+                        -ServicePrincipalId $graphSp.Id `
+                        -All | Where-Object { $_.PrincipalId -eq $sp.Id }
 
-# #1  application-role consent
+# #1  application-role consent for Microsoft Graph
 foreach ($roleId in @(
         $permIds.AuditLog_Read_All,
         $permIds.AuditLogsQuery_Read_All,
         $permIds.Directory_Read_All,
         $permIds.Domain_Read_All,
+        $permIds.Mail_Read,
         $permIds.Organization_Read_All,
         $permIds.Policy_Read_All,
-        $permIds.SharePointTenantSettings_Read_All)
+        $permIds.SharePointTenantSettings_Read_All,
+        $permIds.User_RevokeSessions_All)
 ) {
-    if ($existingRoles.AppRoleId -contains $roleId) {
+    if ($existingGraphRoles.AppRoleId -contains $roleId) {
         Write-Verbose "Role $roleId already present - skipping"
         continue
     }
 
-    try {
-        New-MgServicePrincipalAppRoleAssignment `
-            -ServicePrincipalId $graphSp.Id `
-            -PrincipalId        $sp.Id       `
-            -ResourceId         $graphSp.Id  `
-            -AppRoleId          $roleId | Out-Null
-    } catch {
-        if ($_.ErrorDetails.Message -match 'already exists') {
-            Write-Verbose "Role $roleId already assigned (caught 400) - skipping"
-        } else { throw }
-    }
+    New-MgServicePrincipalAppRoleAssignment `
+        -ServicePrincipalId $graphSp.Id `
+        -PrincipalId        $sp.Id       `
+        -ResourceId         $graphSp.Id  `
+        -AppRoleId          $roleId | Out-Null
 }
 
-# #2  delegated scope (User.Read)
+# application-role consent for Office 365 Exchange Online
+$existingExchangeRoles = Get-MgServicePrincipalAppRoleAssignment `
+                            -ServicePrincipalId $exchangeSp.Id `
+                            -All | Where-Object { $_.PrincipalId -eq $sp.Id }
+
+foreach ($roleId in @(
+        $permIds.Exchange_ManageAsApp,
+        $permIds.ReportingWebService_Read_All)
+) {
+    if ($existingExchangeRoles.AppRoleId -contains $roleId) {
+        Write-Verbose "Role $roleId already present - skipping"
+        continue
+    }
+
+    New-MgServicePrincipalAppRoleAssignment `
+        -ServicePrincipalId $exchangeSp.Id `
+        -PrincipalId        $sp.Id          `
+        -ResourceId         $exchangeSp.Id  `
+        -AppRoleId          $roleId | Out-Null
+}
+
+# application-role consent for Office 365 Management APIs
+$existingManagementRoles = Get-MgServicePrincipalAppRoleAssignment `
+                              -ServicePrincipalId $managementSp.Id `
+                              -All | Where-Object { $_.PrincipalId -eq $sp.Id }
+
+foreach ($roleId in @(
+        $permIds.ActivityFeed_Read,
+        $permIds.ActivityFeed_ReadDlp,
+        $permIds.ServiceHealth_Read)
+) {
+    if ($existingManagementRoles.AppRoleId -contains $roleId) {
+        Write-Verbose "Role $roleId already present - skipping"
+        continue
+    }
+
+    New-MgServicePrincipalAppRoleAssignment `
+        -ServicePrincipalId $managementSp.Id `
+        -PrincipalId        $sp.Id           `
+        -ResourceId         $managementSp.Id `
+        -AppRoleId          $roleId | Out-Null
+}
+
+# #2  delegated scope (User.Read) for Microsoft Graph
 $grant = Get-MgOauth2PermissionGrant `
            -Filter "clientId eq '$($sp.Id)' and resourceId eq '$($graphSp.Id)'" | Select-Object -First 1
 
@@ -213,116 +289,8 @@ if (-not $grant -or ($grant.Scope -notmatch '\bUser\.Read\b')) {
         scope       = 'User.Read'
     } | Out-Null
 }
+
 Write-Host "[OK] Admin consent granted.`n" -ForegroundColor Green
-
-# -- create user with Global Reader role --------------------------------------
-Write-Host "Creating service user with Global Reader permissions ..." -ForegroundColor Cyan
-
-# Validate required permissions
-$context = Get-MgContext
-$requiredScopes = @('User.ReadWrite.All', 'RoleManagement.ReadWrite.Directory')
-$missingScopes = @()
-
-foreach ($scope in $requiredScopes) {
-    if ($context.Scopes -notcontains $scope) {
-        $missingScopes += $scope
-    }
-}
-
-if ($missingScopes.Count -gt 0) {
-    Write-Host "[WARN] Missing required permissions: $($missingScopes -join ', ')" -ForegroundColor Red
-    Write-Host "   -> Please ensure these scopes are consented to in your app registration." -ForegroundColor Yellow
-    Write-Host "   -> Continuing anyway, but operations may fail..." -ForegroundColor Yellow
-}
-
-# Generate secure random password
-$passwordChars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#$%&*"
-$password = -join ((1..16) | ForEach-Object { $passwordChars[(Get-Random -Maximum $passwordChars.Length)] })
-
-# Use TenantId parameter for predictable domain creation
-$context = Get-MgContext
-$userName = "secto-service-reader"
-
-# Use the TenantId parameter directly for better predictability
-if ($TenantId) {
-    $userDomain = $TenantId
-    Write-Host "Using provided TenantId as domain: $userDomain"
-} else {
-    # If no TenantId parameter provided, use the authenticated tenant's ID
-    $userDomain = $context.TenantId
-    Write-Host "Using authenticated tenant ID as domain: $userDomain"
-}
-
-$userPrincipalName = "$userName@$userDomain"
-
-# Create password profile (no forced password change on first login)
-$passwordProfile = @{
-    Password = $password
-    ForceChangePasswordNextSignIn = $false
-}
-
-# -- user creation or retrieval -----------------------------------------------
-$existingUser = Get-MgUser -Filter "userPrincipalName eq '$userPrincipalName'" -ConsistencyLevel eventual -Count c | Select-Object -First 1
-if ($existingUser) {
-    Write-Host "Service user '$userPrincipalName' already exists – resetting password ..." -ForegroundColor Cyan
-
-    # apply the freshly‑generated password to the existing account
-    Update-MgUser -UserId $existingUser.Id -PasswordProfile @{
-        Password = $password
-        ForceChangePasswordNextSignIn = $false
-    } | Out-Null
-
-    $newUser = $existingUser
-}
-else {
-    try {
-        $newUser = New-MgUser -DisplayName "Secto Service Reader" `
-            -PasswordProfile $passwordProfile `
-            -AccountEnabled `
-            -MailNickName $userName `
-            -UserPrincipalName $userPrincipalName `
-            -UsageLocation "US"
-        Write-Host "[OK] Created user: $userPrincipalName" -ForegroundColor Green
-        # Wait for replication
-        Write-Host "Waiting for user replication (10 seconds)..." -ForegroundColor Yellow
-        Start-Sleep -Seconds 10
-    } catch {
-        Write-Host "[WARN] Error creating user: $($_.Exception.Message)" -ForegroundColor Red
-        $newUser = $null
-    }
-}
-
-# -- ensure Global Reader role assignment -------------------------------------
-if ($newUser) {
-    $roleName = "Global Reader"
-    $role = Get-MgDirectoryRole | Where-Object { $_.displayName -eq $roleName }
-    if (-not $role) {
-        Write-Host "Activating Global Reader role in tenant ..."
-        $roleTemplate = Get-MgDirectoryRoleTemplate | Where-Object { $_.displayName -eq $roleName }
-        if ($roleTemplate) { $role = New-MgDirectoryRole -DisplayName $roleName -RoleTemplateId $roleTemplate.Id }
-    }
-
-    $isMember = $false
-    if ($role) {
-        try {
-            $isMember = (Get-MgDirectoryRoleMember -DirectoryRoleId $role.Id -All | Where-Object { $_.Id -eq $newUser.Id }) -ne $null
-        } catch { $isMember = $false }
-    }
-
-    if (-not $isMember) {
-        Write-Host "Assigning Global Reader role to user ..."
-        $newRoleMember = @{ "@odata.id" = "https://graph.microsoft.com/v1.0/directoryObjects/$($newUser.Id)" }
-        try {
-            New-MgDirectoryRoleMemberByRef -DirectoryRoleId $role.Id -BodyParameter $newRoleMember
-            Write-Host "[OK] Assigned Global Reader role to user" -ForegroundColor Green
-        } catch {
-            Write-Host "[WARN] Failed to assign Global Reader role: $($_.Exception.Message)" -ForegroundColor Yellow
-        }
-    }
-    else {
-        Write-Host "User already has Global Reader role – skipping assignment." -ForegroundColor Green
-    }
-}
 
 # -- display required information ----------------------------------------------
 Write-Host "### Required Information for Secto Application ###" -ForegroundColor Cyan
@@ -333,15 +301,6 @@ Write-Host " => Client ID (App ID)..............: '$($app.AppId)' <---" -Foregro
 if ($CreateClientSecret) {
     Write-Host " => Client Secret...................: '$($secret.SecretText)' <---" -ForegroundColor Yellow
     Write-Host " => Secret Valid Until..............: '$($secret.EndDateTime)'" -ForegroundColor Yellow
-}
-Write-Host ""
-if ($newUser) {
-    Write-Host "### Service User Information ###" -ForegroundColor Cyan
-    Write-Host ""
-    Write-Host " => Service User Principal Name.....: '$($newUser.UserPrincipalName)' <--- Global Reader Account" -ForegroundColor Yellow
-    Write-Host " => Service User Password...........: '$password' <--- Ready to use immediately" -ForegroundColor Yellow
-    Write-Host " => Assigned Role...................: 'Global Reader'" -ForegroundColor Yellow
-    Write-Host ""
 }
 Write-Host ""
 
