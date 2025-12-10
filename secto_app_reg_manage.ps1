@@ -87,7 +87,7 @@ $permIds = @{
     Policy_Read_All                   = '246dd0d5-5bd0-4def-940b-0421030a5b68'
     SharePointTenantSettings_Read_All = '83d4163d-a2d8-4d3b-9695-4ae3ca98f888'
     User_Read                         = 'e1fe6dd8-ba31-4d61-89e7-88639da4683d'
-    User_RevokeSessions_All           = '89fe6a52-be36-487e-b7d8-d061c450a026'
+    User_RevokeSessions_All           = '77f3a031-c388-4f99-b373-dc68676a979e'
 
     # Office 365 Exchange Online
     Exchange_ManageAsApp              = 'dc50a0fb-09a3-484d-be87-e023b12c6440'
@@ -181,11 +181,11 @@ if ($null -eq $app) {
 
     if ($graphRRA) {
         $existingIds  = $graphRRA.resourceAccess.id
-        $missingItems = $resourceAccess | Where-Object { $existingIds -notcontains $_.id }
+        $missingItems = $graphResourceAccess | Where-Object { $existingIds -notcontains $_.id }
         $graphRRA.resourceAccess += $missingItems
     }
     else {
-        $existingRRA += @{ resourceAppId = $graphSp.AppId; resourceAccess = $resourceAccess }
+        $existingRRA += @{ resourceAppId = $graphSp.AppId; resourceAccess = $graphResourceAccess }
     }
 
     Update-MgApplication -ApplicationId $app.Id `
