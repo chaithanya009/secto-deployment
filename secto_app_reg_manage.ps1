@@ -87,6 +87,7 @@ $permIds = @{
     Policy_Read_All                   = '246dd0d5-5bd0-4def-940b-0421030a5b68'
     SharePointTenantSettings_Read_All = '83d4163d-a2d8-4d3b-9695-4ae3ca98f888'
     User_Read                         = 'e1fe6dd8-ba31-4d61-89e7-88639da4683d'
+    User_RevokeSessions_All           = '89fe6a52-be36-487e-b7d8-d061c450a026'
 
     # Office 365 Exchange Online
     Exchange_ManageAsApp              = 'dc50a0fb-09a3-484d-be87-e023b12c6440'
@@ -117,7 +118,6 @@ $graphResourceAccess += @{ id = $permIds.AuditLog_Read_All;                 type
 $graphResourceAccess += @{ id = $permIds.AuditLogsQuery_Read_All;           type = 'Role' }
 $graphResourceAccess += @{ id = $permIds.Directory_Read_All;                type = 'Role' }
 $graphResourceAccess += @{ id = $permIds.Domain_Read_All;                   type = 'Role' }
-$graphResourceAccess += @{ id = $permIds.Mail_Read;                         type = 'Role' }
 $graphResourceAccess += @{ id = $permIds.Organization_Read_All;             type = 'Role' }
 $graphResourceAccess += @{ id = $permIds.Policy_Read_All;                   type = 'Role' }
 $graphResourceAccess += @{ id = $permIds.SharePointTenantSettings_Read_All; type = 'Role' }
@@ -216,7 +216,6 @@ foreach ($roleId in @(
         $permIds.AuditLogsQuery_Read_All,
         $permIds.Directory_Read_All,
         $permIds.Domain_Read_All,
-        $permIds.Mail_Read,
         $permIds.Organization_Read_All,
         $permIds.Policy_Read_All,
         $permIds.SharePointTenantSettings_Read_All,
