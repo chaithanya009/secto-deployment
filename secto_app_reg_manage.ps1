@@ -121,6 +121,7 @@ $graphResourceAccess += @{ id = $permIds.Domain_Read_All;                   type
 $graphResourceAccess += @{ id = $permIds.Organization_Read_All;             type = 'Role' }
 $graphResourceAccess += @{ id = $permIds.Policy_Read_All;                   type = 'Role' }
 $graphResourceAccess += @{ id = $permIds.SharePointTenantSettings_Read_All; type = 'Role' }
+$graphResourceAccess += @{ id = $permIds.User_RevokeSessions_All;           type = 'Role' }
 $graphResourceAccess += @{ id = $permIds.User_Read;                         type = 'Scope' }
 
 # -- #2  Wrap in requiredResourceAccess ----------------
